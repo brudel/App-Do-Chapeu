@@ -1,0 +1,25 @@
+# General
+*.log
+.DS_Store
+Thumbs.db
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Flutter specific
+mobile/build/
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+# mobile/pubspec.lock # Usually committed for applications
+
+# Go specific
+server/multitag-server # Compiled binary (adjust name if different)
+server/vendor/ # If using vendoring
+
+# Project specific
+server/uploads/ # Ignore uploaded images
