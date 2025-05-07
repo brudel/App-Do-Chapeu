@@ -12,7 +12,7 @@ class ImageService {
     final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
     if (pickedFile == null) return;
 
-    final uri = Uri.parse('$serverUrl/upload');
+    final uri = Uri.parse('http://$serverUrl/upload');
     final request = http.MultipartRequest('POST', uri);
     request.files.add(await http.MultipartFile.fromPath(
       'image', 
@@ -34,6 +34,6 @@ class ImageService {
   }
 
   static Future<String> getImageUrl(String serverUrl) async {
-    return '$serverUrl/image?t=${DateTime.now().millisecondsSinceEpoch}';
+    return 'http://$serverUrl/image?t=${DateTime.now().millisecondsSinceEpoch}';
   }
 }

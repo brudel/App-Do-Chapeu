@@ -74,7 +74,7 @@ Create a Flutter application and a Go server to synchronize the display of a pre
 
 ## Flow Diagram (Mermaid)
 
-```mermaid
+~~~ mermaid
 sequenceDiagram
     participant ClientApp as Flutter App (Client ID)
     participant GoServer as Go Server (Gin + WS)
@@ -116,3 +116,4 @@ sequenceDiagram
         GoServer-->>ClientApp: Send Current State {"type": "full_state", ...}
         ClientApp->>ClientApp: Re-sync state, ensure image cached, schedule actions if needed.
     end
+~~~

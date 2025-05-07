@@ -133,9 +133,6 @@ func createImageHandler(state *ServerState) gin.HandlerFunc {
 }
 
 func handleClientRegistration(state *ServerState, clientID string, conn *websocket.Conn) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-
 	if _, exists := state.Clients[clientID]; !exists {
 		state.Clients[clientID] = &ClientState{
 			Conn:    conn,
