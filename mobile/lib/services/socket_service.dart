@@ -1,22 +1,22 @@
 import 'dart:convert';
-import 'package:multitag/models/app_state.dart';
+import 'package:multitag/models/app_state_provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 class SocketService {
   late WebSocketChannel _channel;
   final String _serverUrl;
-  final AppState _appState;
+  final AppStateProvider _stateProvider;
   final void Function() _handleStart;
 
   SocketService({
     required String serverUrl,
-    required AppState appState,
+    required AppStateProvider stateProvider, // Changed from AppState to AppStateProvider
     required void Function() handleStart,
   }) :
       _serverUrl = serverUrl,
-      _appState = appState,
+      _stateProvider = stateProvider, // Changed from _appState to _stateProvider
       _handleStart = handleStart
-   { 
+   {
     _initSocket(serverUrl);
    }
 
@@ -27,9 +27,9 @@ class SocketService {
       onDone: _handleDisconnection,
       onError: (error) => _handleDisconnection(),
     );
-  _registerClient(_appState.clientId);
+    _registerClient(_stateProvider.clientId); // Access clientId via provider
     
-    setState(() => _appState = _appState.copyWith(isConnected: true));
+    _stateProvider.updateWith(isConnected: true); // Use provider to update state
   }
   
   void _handleServerMessage(dynamic message) {
@@ -38,33 +38,32 @@ class SocketService {
       final data = jsonDecode(message);
       switch (data['type']) {
         case 'full_state':
-          setState(() => _appState = _appState.copyWith(
+          _stateProvider.updateWith( // Use provider to update state
             readyCount: data['state']['readyCount'] ?? 0,
             totalCount: data['state']['totalCount'] ?? 0,
-            overallState: data['state']['overallState'] ?? 'WaitingForUsers',
             imageUrl: data['state']['hasImage'] == true
               ? '${_serverUrl.replaceFirst('ws:', 'http:')}/image'
               : null,
-          ));
+          );
           break;
           
         case 'partial_state':
-          setState(() => _appState = _appState.copyWith(
-            readyCount: data['readyCount'] ?? 0,
-            totalCount: data['totalCount'] ?? 0,
-          ));
+          _stateProvider.updateWith( // Use provider to update state
+            readyCount: data['readyCount'] ?? _stateProvider.readyCount,
+            totalCount: data['totalCount'] ?? _stateProvider.totalCount,
+          );
           break;
           
         case 'image_updated':
-          setState(() => _appState = _appState.copyWith(
-            imageUrl: 'http://$_serverUrl/image?t=${DateTime.now().millisecondsSinceEpoch}',
-          ));
+          _stateProvider.updateWith( // Use provider to update state
+            imageUrl: 'http://$_serverUrl/image',
+          );
           break;
           
         case 'start':
-          setState(() => _appState = _appState.copyWith(
+          _stateProvider.updateWith( // Use provider to update state
             targetTimeUTC: data['targetTimestampUTC'],
-          ));
+          );
           _handleStart();
           break;
       }
@@ -74,7 +73,7 @@ class SocketService {
   }
 
   void _handleDisconnection() {
-    setState(() => _appState = _appState.copyWith(isConnected: false));
+    _stateProvider.updateWith(isConnected: false); // Use provider to update state
     Future.delayed(const Duration(seconds: 5), () {
       _initSocket(_serverUrl);
     });

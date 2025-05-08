@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:http/http.dart' as http;
 
 class ImageDisplay extends StatelessWidget {
   final String imageUrl;
@@ -13,10 +13,10 @@ class ImageDisplay extends StatelessWidget {
   Widget build(BuildContext context) {
     return Expanded(
       child: FutureBuilder(
-        future: DefaultCacheManager().getSingleFile(imageUrl),
+        future: http.get(Uri.parse('http://$imageUrl/image')),
         builder: (context, snapshot) {
           if (snapshot.hasData) {
-            return Image.file(snapshot.data!);
+            return Image.memory(snapshot.data!.bodyBytes);
           }
           return const Center(child: CircularProgressIndicator());
         },
