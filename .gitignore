@@ -18,8 +18,7 @@ mobile/.flutter-plugins-dependencies
 # mobile/pubspec.lock # Usually committed for applications
 
 # Go specific
-server/multitag-server # Compiled binary (adjust name if different)
-server/vendor/ # If using vendoring
+server/multitag-server
 
 # Project specific
-server/uploads/ # Ignore uploaded images
+server/uploads/
