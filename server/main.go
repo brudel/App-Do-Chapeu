@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -10,6 +11,7 @@ import (
 )
 
 const minUsers = 1
+const serverResetDelay = 3 * time.Second
 
 type ServerState struct {
 	mu             sync.Mutex
@@ -25,10 +27,29 @@ type ClientState struct {
 	LastSeen int64
 }
 
-var globalState *ServerState
+var globalState ServerState
+
+func softStateReset() {
+
+	globalState.mu.Lock()
+
+	globalState.OverallState = "WaitingForReady" // Reset to a known initial state
+	globalState.TargetShowTime = ""              // Clear the target time as it's now processed
+
+	for clientID := range globalState.Clients {
+		if client, ok := globalState.Clients[clientID]; ok {
+			client.IsReady = false // Reset ready state for all clients
+		}
+	}
+	log.Printf("AfterFunc: Global state has been reset. New state: %s.", globalState.OverallState)
+
+	globalState.mu.Unlock() // Unlock BEFORE I/O (fileExists and broadcasting)
+
+	broadcastToClients(generateFullStateMessage())
+}
 
 func main() {
-	globalState = &ServerState{
+	globalState = ServerState{
 		Clients:       make(map[string]*ClientState),
 		ExpectedUsers: minUsers,
 		OverallState:  "WaitingForUsers",

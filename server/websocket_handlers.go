@@ -19,131 +19,70 @@ var (
 	}
 )
 
-// countReadyClientsLocked assumes the globalState.mu is already locked.
-func countReadyClientsLocked() int {
-	count := 0
-	for _, client := range globalState.Clients {
-		if client.IsReady {
-			count++
-		}
-	}
-	return count
-}
-
-func broadcastToClients(message interface{}) {
-	globalState.mu.Lock()
-	// Create a list of connections to send to, under lock, to avoid holding lock during I/O
-	connsToBroadcast := make([]*websocket.Conn, 0, len(globalState.Clients))
-	for _, client := range globalState.Clients {
-		if client.Conn != nil {
-			connsToBroadcast = append(connsToBroadcast, client.Conn)
-		}
-	}
-	globalState.mu.Unlock() // Unlock before sending
-
-	for _, conn := range connsToBroadcast {
-		if err := conn.WriteJSON(message); err != nil {
-			log.Printf("Error broadcasting to client: %v", err)
-			// Consider more sophisticated error handling, e.g., removing dead clients.
-		}
-	}
-}
-
-func broadcastPartialState(clientID string, isReady bool, readyCount int, totalCount int) {
-	broadcastToClients(gin.H{
-		"type":       "partial_state",
-		"clientId":   clientID,
-		"isReady":    isReady,
-		"readyCount": readyCount,
-		"totalCount": totalCount,
-	})
-}
-
-func sendFullState(conn *websocket.Conn) {
-	globalState.mu.Lock()
-	// Make it an struct
-	readyCount := countReadyClientsLocked()
-	totalCount := len(globalState.Clients)
-	overallState := globalState.OverallState
-	targetTime := globalState.TargetShowTime
-
-	globalState.mu.Unlock() // Unlock before file access and network I/O
-
-	hasImg := fileExists(imagePath) // fileExists is from image_handlers.go
-
-	// Error from WriteJSON is not handled here, consider adding it.
-	conn.WriteJSON(gin.H{
-		"type": "full_state",
-		"state": gin.H{
-			"readyCount":    readyCount,
-			"totalCount":    totalCount,
-			"overallState":  overallState,
-			"hasImage":      hasImg,
-			"targetTimeUTC": targetTime,
-		},
-	})
-}
-
-func handleClientRegistration(clientID string, conn *websocket.Conn) {
+func handleClientRegistration(clientID string, isReady bool, conn *websocket.Conn) {
 	globalState.mu.Lock()
 
-	if _, exists := globalState.Clients[clientID]; !exists {
+	if _, exists := globalState.Clients[clientID]; exists {
+		globalState.Clients[clientID].Conn = conn
+		globalState.Clients[clientID].LastSeen = time.Now().Unix()
+		globalState.Clients[clientID].IsReady = isReady
+	} else {
 		globalState.Clients[clientID] = &ClientState{
 			Conn:     conn,
 			LastSeen: time.Now().Unix(),
+			IsReady:  isReady,
 		}
+
 		if len(globalState.Clients) >= globalState.ExpectedUsers &&
 			globalState.OverallState == "WaitingForUsers" {
 			globalState.OverallState = "WaitingForReady"
 		}
-	} else {
-		globalState.Clients[clientID].Conn = conn
-		globalState.Clients[clientID].LastSeen = time.Now().Unix()
-		globalState.Clients[clientID].IsReady = false // Reset ready state on re-register
-	}
-	clientIsReady := globalState.Clients[clientID].IsReady // Get the actual state after registration logic
+	} // Get the actual state after registration logic
 
 	// Get counts for broadcastPartialState while lock is held
-	currentReadyCount := countReadyClientsLocked()
-	currentTotalCount := len(globalState.Clients)
+	readyCount := countReadyClientsLocked()
+	totalCount := len(globalState.Clients)
 
 	globalState.mu.Unlock() // Unlock before network I/O
 
-	sendFullState(conn) // sendFullState handles its own locking
-	broadcastPartialState(clientID, clientIsReady, currentReadyCount, currentTotalCount)
+	conn.WriteJSON(generateFullStateMessage()) // sendFullState handles its own locking
+	broadcastPartialState(clientID, isReady, readyCount, totalCount)
+}
+
+func checkStartLocked(readyCount int, totalCount int) string {
+	if readyCount < totalCount ||
+		globalState.OverallState != "WaitingForReady" {
+		return ""
+	}
+
+	globalState.OverallState = "Triggered"
+	globalState.TargetShowTime = time.Now().UTC().Add(3 * time.Second).Format(time.RFC3339Nano)
+
+	return globalState.TargetShowTime
 }
 
 func handleReadyState(clientID string, isReady bool) {
-	var startMessage gin.H
-
 	globalState.mu.Lock()
 	client, exists := globalState.Clients[clientID]
 	if !exists {
 		globalState.mu.Unlock()
+		log.Printf("Received 'ready' from unknown clientID: %s", clientID)
 		return
 	}
 
 	client.IsReady = isReady
 	client.LastSeen = time.Now().Unix()
 
-	currentReadyCount := countReadyClientsLocked()
-	currentTotalCount := len(globalState.Clients)
+	readyCount := countReadyClientsLocked()
+	totalCount := len(globalState.Clients)
 
-	if currentReadyCount >= currentTotalCount &&
-		globalState.OverallState == "WaitingForReady" {
-		globalState.OverallState = "Triggered"
-		globalState.TargetShowTime = time.Now().UTC().Add(3 * time.Second).Format(time.RFC3339Nano)
-		startMessage = gin.H{
-			"type":               "start",
-			"targetTimestampUTC": globalState.TargetShowTime,
-		}
-	}
+	parsedTargetTime := checkStartLocked(readyCount, totalCount)
 	globalState.mu.Unlock()
 
-	broadcastPartialState(clientID, isReady, currentReadyCount, currentTotalCount)
-
-	if startMessage != nil {
-		broadcastToClients(startMessage)
+	if parsedTargetTime != "" {
+		start(readyCount, totalCount, parsedTargetTime)
+	} else {
+		broadcastPartialState(clientID, isReady, readyCount, totalCount)
 	}
 }
 
@@ -173,22 +112,10 @@ func webSocketHandler(c *gin.Context) {
 			// This needs locking and careful handling if msg.ClientID is known.
 			break
 		}
-
-		globalState.mu.Lock() // Lock for operations that might read/write client map or client state
-		client, clientExists := globalState.Clients[msg.ClientID]
-		if clientExists {
-			client.LastSeen = time.Now().Unix()
-		}
-		globalState.mu.Unlock() // Unlock after updating LastSeen
-
 		switch msg.Type {
 		case "register":
-			handleClientRegistration(msg.ClientID, conn)
+			handleClientRegistration(msg.ClientID, msg.IsReady, conn)
 		case "ready":
-			if !clientExists { // Ensure client is registered before processing ready state
-				log.Printf("Received 'ready' from unknown clientID: %s", msg.ClientID)
-				continue
-			}
 			handleReadyState(msg.ClientID, msg.IsReady)
 		default:
 			log.Printf("Received unknown message type: %s from ClientID: %s", msg.Type, msg.ClientID)
