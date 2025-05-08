@@ -59,6 +59,31 @@ func broadcastPartialState(clientID string, isReady bool, readyCount int, totalC
 	})
 }
 
+func sendFullState(conn *websocket.Conn) {
+	globalState.mu.Lock()
+	// Make it an struct
+	readyCount := countReadyClientsLocked()
+	totalCount := len(globalState.Clients)
+	overallState := globalState.OverallState
+	targetTime := globalState.TargetShowTime
+
+	globalState.mu.Unlock() // Unlock before file access and network I/O
+
+	hasImg := fileExists(imagePath) // fileExists is from image_handlers.go
+
+	// Error from WriteJSON is not handled here, consider adding it.
+	conn.WriteJSON(gin.H{
+		"type": "full_state",
+		"state": gin.H{
+			"readyCount":    readyCount,
+			"totalCount":    totalCount,
+			"overallState":  overallState,
+			"hasImage":      hasImg,
+			"targetTimeUTC": targetTime,
+		},
+	})
+}
+
 func handleClientRegistration(clientID string, conn *websocket.Conn) {
 	globalState.mu.Lock()
 
@@ -120,31 +145,6 @@ func handleReadyState(clientID string, isReady bool) {
 	if startMessage != nil {
 		broadcastToClients(startMessage)
 	}
-}
-
-func sendFullState(conn *websocket.Conn) {
-	globalState.mu.Lock()
-	// Make it an struct
-	readyCount := countReadyClientsLocked()
-	totalCount := len(globalState.Clients)
-	overallState := globalState.OverallState
-	targetTime := globalState.TargetShowTime
-
-	globalState.mu.Unlock() // Unlock before file access and network I/O
-
-	hasImg := fileExists(imagePath) // fileExists is from image_handlers.go
-
-	// Error from WriteJSON is not handled here, consider adding it.
-	conn.WriteJSON(gin.H{
-		"type": "full_state",
-		"state": gin.H{
-			"readyCount":    readyCount,
-			"totalCount":    totalCount,
-			"overallState":  overallState,
-			"hasImage":      hasImg,
-			"targetTimeUTC": targetTime,
-		},
-	})
 }
 
 func webSocketHandler(c *gin.Context) {

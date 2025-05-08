@@ -9,6 +9,8 @@ import (
 	// gorilla/websocket is now used in websocket_handlers.go
 )
 
+const minUsers = 1
+
 type ServerState struct {
 	mu             sync.Mutex
 	Clients        map[string]*ClientState
@@ -28,7 +30,7 @@ var globalState *ServerState
 func main() {
 	globalState = &ServerState{
 		Clients:       make(map[string]*ClientState),
-		ExpectedUsers: 1,
+		ExpectedUsers: minUsers,
 		OverallState:  "WaitingForUsers",
 	}
 
