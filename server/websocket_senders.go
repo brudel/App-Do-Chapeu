@@ -11,7 +11,7 @@ import (
 // countReadyClientsLocked assumes the globalState.mu is already locked.
 func countReadyClientsLocked() int {
 	count := 0
-	for _, client := range globalState.Clients {
+	for _, client := range serverState.Clients {
 		if client.IsReady {
 			count++
 		}
@@ -20,15 +20,15 @@ func countReadyClientsLocked() int {
 }
 
 func broadcastToClients(message interface{}) {
-	globalState.mu.Lock()
+	serverState.mu.Lock()
 	// Create a list of connections to send to, under lock, to avoid holding lock during I/O
-	connsToBroadcast := make([]*websocket.Conn, 0, len(globalState.Clients))
-	for _, client := range globalState.Clients {
+	connsToBroadcast := make([]*websocket.Conn, 0, len(serverState.Clients))
+	for _, client := range serverState.Clients {
 		if client.Conn != nil {
 			connsToBroadcast = append(connsToBroadcast, client.Conn)
 		}
 	}
-	globalState.mu.Unlock() // Unlock before sending
+	serverState.mu.Unlock() // Unlock before sending
 
 	for _, conn := range connsToBroadcast {
 		go func() {
@@ -51,14 +51,14 @@ func broadcastPartialState(clientID string, isReady bool, readyCount int, totalC
 }
 
 func generateFullStateMessage() gin.H {
-	globalState.mu.Lock()
+	serverState.mu.Lock()
 	// Make it an struct
 	readyCount := countReadyClientsLocked()
-	totalCount := len(globalState.Clients)
-	overallState := globalState.OverallState
-	targetTime := globalState.TargetShowTime
+	totalCount := len(serverState.Clients)
+	overallState := serverState.OverallState
+	targetTime := serverState.TargetShowTime
 
-	globalState.mu.Unlock() // Unlock before file access and network I/O
+	serverState.mu.Unlock() // Unlock before file access and network I/O
 
 	hasImg := fileExists(imagePath) // fileExists is from image_handlers.go
 	return gin.H{

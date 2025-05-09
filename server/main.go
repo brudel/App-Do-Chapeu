@@ -27,29 +27,29 @@ type ClientState struct {
 	LastSeen int64
 }
 
-var globalState ServerState
+var serverState ServerState
 
 func softStateReset() {
 
-	globalState.mu.Lock()
+	serverState.mu.Lock()
 
-	globalState.OverallState = "WaitingForReady" // Reset to a known initial state
-	globalState.TargetShowTime = ""              // Clear the target time as it's now processed
+	serverState.OverallState = "WaitingForReady" // Reset to a known initial state
+	serverState.TargetShowTime = ""              // Clear the target time as it's now processed
 
-	for clientID := range globalState.Clients {
-		if client, ok := globalState.Clients[clientID]; ok {
+	for clientID := range serverState.Clients {
+		if client, ok := serverState.Clients[clientID]; ok {
 			client.IsReady = false // Reset ready state for all clients
 		}
 	}
-	log.Printf("AfterFunc: Global state has been reset. New state: %s.", globalState.OverallState)
+	log.Printf("AfterFunc: Global state has been reset. New state: %s.", serverState.OverallState)
 
-	globalState.mu.Unlock() // Unlock BEFORE I/O (fileExists and broadcasting)
+	serverState.mu.Unlock() // Unlock BEFORE I/O (fileExists and broadcasting)
 
 	broadcastToClients(generateFullStateMessage())
 }
 
 func main() {
-	globalState = ServerState{
+	serverState = ServerState{
 		Clients:       make(map[string]*ClientState),
 		ExpectedUsers: minUsers,
 		OverallState:  "WaitingForUsers",

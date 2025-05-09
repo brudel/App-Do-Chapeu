@@ -20,30 +20,30 @@ var (
 )
 
 func handleClientRegistration(clientID string, isReady bool, conn *websocket.Conn) {
-	globalState.mu.Lock()
+	serverState.mu.Lock()
 
-	if _, exists := globalState.Clients[clientID]; exists {
-		globalState.Clients[clientID].Conn = conn
-		globalState.Clients[clientID].LastSeen = time.Now().Unix()
-		globalState.Clients[clientID].IsReady = isReady
+	if _, exists := serverState.Clients[clientID]; exists {
+		serverState.Clients[clientID].Conn = conn
+		serverState.Clients[clientID].LastSeen = time.Now().Unix()
+		serverState.Clients[clientID].IsReady = isReady
 	} else {
-		globalState.Clients[clientID] = &ClientState{
+		serverState.Clients[clientID] = &ClientState{
 			Conn:     conn,
 			LastSeen: time.Now().Unix(),
 			IsReady:  isReady,
 		}
 
-		if len(globalState.Clients) >= globalState.ExpectedUsers &&
-			globalState.OverallState == "WaitingForUsers" {
-			globalState.OverallState = "WaitingForReady"
+		if len(serverState.Clients) >= serverState.ExpectedUsers &&
+			serverState.OverallState == "WaitingForUsers" {
+			serverState.OverallState = "WaitingForReady"
 		}
 	} // Get the actual state after registration logic
 
 	// Get counts for broadcastPartialState while lock is held
 	readyCount := countReadyClientsLocked()
-	totalCount := len(globalState.Clients)
+	totalCount := len(serverState.Clients)
 
-	globalState.mu.Unlock() // Unlock before network I/O
+	serverState.mu.Unlock() // Unlock before network I/O
 
 	conn.WriteJSON(generateFullStateMessage()) // sendFullState handles its own locking
 	broadcastPartialState(clientID, isReady, readyCount, totalCount)
@@ -51,21 +51,21 @@ func handleClientRegistration(clientID string, isReady bool, conn *websocket.Con
 
 func checkStartLocked(readyCount int, totalCount int) string {
 	if readyCount < totalCount ||
-		globalState.OverallState != "WaitingForReady" {
+		serverState.OverallState != "WaitingForReady" {
 		return ""
 	}
 
-	globalState.OverallState = "Triggered"
-	globalState.TargetShowTime = time.Now().UTC().Add(3 * time.Second).Format(time.RFC3339Nano)
+	serverState.OverallState = "Triggered"
+	serverState.TargetShowTime = time.Now().UTC().Add(3 * time.Second).Format(time.RFC3339Nano)
 
-	return globalState.TargetShowTime
+	return serverState.TargetShowTime
 }
 
 func handleReadyState(clientID string, isReady bool) {
-	globalState.mu.Lock()
-	client, exists := globalState.Clients[clientID]
+	serverState.mu.Lock()
+	client, exists := serverState.Clients[clientID]
 	if !exists {
-		globalState.mu.Unlock()
+		serverState.mu.Unlock()
 		log.Printf("Received 'ready' from unknown clientID: %s", clientID)
 		return
 	}
@@ -74,10 +74,10 @@ func handleReadyState(clientID string, isReady bool) {
 	client.LastSeen = time.Now().Unix()
 
 	readyCount := countReadyClientsLocked()
-	totalCount := len(globalState.Clients)
+	totalCount := len(serverState.Clients)
 
 	parsedTargetTime := checkStartLocked(readyCount, totalCount)
-	globalState.mu.Unlock()
+	serverState.mu.Unlock()
 
 	if parsedTargetTime != "" {
 		start(readyCount, totalCount, parsedTargetTime)
@@ -86,17 +86,7 @@ func handleReadyState(clientID string, isReady bool) {
 	}
 }
 
-func webSocketHandler(c *gin.Context) {
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		log.Printf("Failed to upgrade to WebSocket: %v", err)
-		return
-	}
-	defer conn.Close()
-
-	// On initial connection, we don't know the clientID yet.
-	// It will be sent in the "register" message.
-
+func listenSocket(conn *websocket.Conn) {
 	for {
 		var msg struct {
 			Type     string `json:"type"`
@@ -125,4 +115,17 @@ func webSocketHandler(c *gin.Context) {
 	// For example, after the loop breaks, if a clientID was associated with this connection,
 	// remove it from globalState.Clients and broadcast an update.
 	// This requires knowing the clientID for this connection.
+}
+
+func webSocketHandler(c *gin.Context) {
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		log.Printf("Failed to upgrade to WebSocket: %v", err)
+		return
+	}
+
+	// On initial connection, we don't know the clientID yet.
+	// It will be sent in the "register" message.
+
+	go listenSocket(conn)
 }
