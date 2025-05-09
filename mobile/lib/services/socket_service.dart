@@ -17,51 +17,77 @@ class SocketService {
       _stateProvider = stateProvider, // Changed from _appState to _stateProvider
       _handleStart = handleStart
    {
-    _initSocket(serverUrl);
+    _tryToConnect();
    }
 
-  _initSocket(String serverUrl) {
-    _channel = WebSocketChannel.connect(Uri.parse('ws://$_serverUrl/ws'));
-    _channel.stream.listen(
-      _handleServerMessage,
-      onDone: _handleDisconnection,
-      onError: (error) => _handleDisconnection(),
-    );
-    _registerClient(_stateProvider.clientId); // Access clientId via provider
-    
-    _stateProvider.updateWith(isConnected: true); // Use provider to update state
-  }
+  _tryToConnect() async {
+
+    // print('\t\t\t Creating WebSocket');
+    try {
+      _channel = WebSocketChannel.connect(Uri.parse('ws://$_serverUrl/ws'));
+      _channel.stream.listen(
+        _handleServerMessage,
+        onError: _onWebSocketError,
+        onDone: _onWebSocketDisconnection,
+      );
   
+      await _channel.ready;
+    } on Exception catch (e) {
+      //print('\t\t\t Error creating WebSocket: $e');
+      return;
+    }
+
+    //print('\t\t WebSocker ready');
+
+    if (_channel.closeCode == null) {
+      //print('\t\t Connected successfully');
+      _stateProvider.updateWith(isConnected: true);
+
+      _registerClient(_stateProvider.clientId);
+    }
+  }
+
+  void _onWebSocketError(Object error) {
+    //print('\t\t Error on WebSocket: $error');
+  }
+
+  void _onWebSocketDisconnection() {
+    //print('\t\t Listener disconnected');
+    _stateProvider.updateWith(isConnected: false);
+    Future.delayed(const Duration(milliseconds: 1000), _tryToConnect);
+  }
+
+  void _registerClient(String clientId) {
+    _channel.sink.add('{"type":"register","clientId":"$clientId","isReady":${_stateProvider.isReady}}');
+  }
+
   void _handleServerMessage(dynamic message) {
-    print('Received: $message');
     try {
       final data = jsonDecode(message);
       switch (data['type']) {
         case 'full_state':
-          _stateProvider.updateWith( // Use provider to update state
+          _stateProvider.updateWith(
             readyCount: data['state']['readyCount'] ?? 0,
             totalCount: data['state']['totalCount'] ?? 0,
-            imageUrl: data['state']['hasImage'] == true
-              ? '${_serverUrl.replaceFirst('ws:', 'http:')}/image'
-              : null,
+            imageUrl: 'http://$_serverUrl/image',
           );
           break;
-          
+
         case 'partial_state':
-          _stateProvider.updateWith( // Use provider to update state
+          _stateProvider.updateWith(
             readyCount: data['readyCount'] ?? _stateProvider.readyCount,
             totalCount: data['totalCount'] ?? _stateProvider.totalCount,
           );
           break;
-          
+
         case 'image_updated':
-          _stateProvider.updateWith( // Use provider to update state
+          _stateProvider.updateWith(
             imageUrl: 'http://$_serverUrl/image',
           );
           break;
           
         case 'start':
-          _stateProvider.updateWith( // Use provider to update state
+          _stateProvider.updateWith(
             targetTimeUTC: data['targetTimestampUTC'],
           );
           _handleStart();
@@ -70,17 +96,6 @@ class SocketService {
     } catch (e) {
       print('Error handling message: $e');
     }
-  }
-
-  void _handleDisconnection() {
-    _stateProvider.updateWith(isConnected: false); // Use provider to update state
-    Future.delayed(const Duration(seconds: 5), () {
-      _initSocket(_serverUrl);
-    });
-  }
-
-  void _registerClient(String clientId) {
-    _channel.sink.add('{"type":"register","clientId":"$clientId"}');
   }
 
   void sendReadyStatus(String clientId, bool isReady) {
