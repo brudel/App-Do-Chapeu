@@ -9,6 +9,7 @@ Thumbs.db
 *.iml
 *.ipr
 *.iws
+devtools_options.yaml
 
 # Flutter specific
 mobile/build/

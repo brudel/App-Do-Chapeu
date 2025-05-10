@@ -22,9 +22,10 @@ type ServerState struct {
 }
 
 type ClientState struct {
-	Conn     *websocket.Conn
-	IsReady  bool
-	LastSeen int64
+	Conn             *websocket.Conn
+	IsReady          bool
+	registrationTime int64
+	RemovalTimer     *time.Timer
 }
 
 var serverState ServerState

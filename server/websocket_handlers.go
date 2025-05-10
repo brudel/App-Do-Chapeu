@@ -9,6 +9,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	pongDeadline  = 500 * time.Millisecond
+	pingFrequency = 500 * time.Millisecond
+)
+
 var (
 	upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -19,18 +24,102 @@ var (
 	}
 )
 
+func pongHandler(conn *websocket.Conn) func(string) error {
+	return func(message string) error {
+		conn.SetReadDeadline(time.Now().Add(pingFrequency + pongDeadline))
+		go ping(conn)
+
+		return nil
+	}
+}
+
+func ping(conn *websocket.Conn) {
+	time.Sleep(pingFrequency)
+	conn.WriteMessage(websocket.PingMessage, nil)
+}
+
+func removeClient(clientID string) {
+	serverState.mu.Lock()
+	_, exists := serverState.Clients[clientID]
+	if !exists {
+		log.Printf("ERROR: Removing non-existing client: '%s'", clientID)
+		serverState.mu.Unlock()
+		return
+	}
+
+	delete(serverState.Clients, clientID)
+
+	readyCount := countReadyClientsLocked()
+	totalCount := len(serverState.Clients)
+
+	if totalCount < serverState.ExpectedUsers &&
+		serverState.OverallState == "WaitingForReady" {
+		serverState.OverallState = "WaitingForUsers"
+	}
+
+	serverState.mu.Unlock()
+	log.Printf("Removing ClientID: %s", clientID)
+
+	broadcastPartialState(clientID, false, readyCount, totalCount)
+}
+
+func handleDisconnection(clientID string) {
+
+	serverState.mu.Lock()
+	client, exists := serverState.Clients[clientID]
+
+	if !exists {
+		log.Printf("ERROR: Disconnecting non-existing ClientID: %s", clientID)
+		serverState.mu.Unlock() // Unlock before returning
+		return
+	}
+
+	// If there's an existing removal timer, stop it.
+	if client.RemovalTimer != nil {
+		log.Printf("ERROR: Doubbled disconnection Timer for ClientID: %s", clientID)
+		client.RemovalTimer.Stop()
+	}
+
+	client.IsReady = false
+	readyCount := countReadyClientsLocked()
+	totalCount := len(serverState.Clients)
+
+	// Schedule client removal
+	client.RemovalTimer = time.AfterFunc(5*time.Second, func() {
+		removeClient(clientID)
+	})
+	//log.Printf("Scheduled removal of ClientID %s in 5 seconds.", clientID)
+
+	serverState.mu.Unlock()
+
+	log.Printf("Disconnecting ClientID: %s", clientID)
+
+	broadcastPartialState(clientID, false, readyCount, totalCount)
+}
+
 func handleClientRegistration(clientID string, isReady bool, conn *websocket.Conn) {
 	serverState.mu.Lock()
 
-	if _, exists := serverState.Clients[clientID]; exists {
-		serverState.Clients[clientID].Conn = conn
-		serverState.Clients[clientID].LastSeen = time.Now().Unix()
-		serverState.Clients[clientID].IsReady = isReady
+	if client, exists := serverState.Clients[clientID]; exists {
+		log.Printf("Reconnecting clientID: %s", clientID)
+		// Client is reconnecting
+		client.Conn = conn
+		client.registrationTime = time.Now().UnixNano()
+		client.IsReady = isReady
+
+		// Cancel pending removal if any
+		if client.RemovalTimer != nil {
+			client.RemovalTimer.Stop()
+			client.RemovalTimer = nil // Clear the timer
+		}
 	} else {
+		log.Printf("Registering clientID: %s", clientID)
+		// New client registration
 		serverState.Clients[clientID] = &ClientState{
-			Conn:     conn,
-			LastSeen: time.Now().Unix(),
-			IsReady:  isReady,
+			Conn:             conn,
+			registrationTime: time.Now().UnixNano(),
+			IsReady:          isReady,
+			// RemovalTimer is nil by default
 		}
 
 		if len(serverState.Clients) >= serverState.ExpectedUsers &&
@@ -71,7 +160,6 @@ func handleReadyState(clientID string, isReady bool) {
 	}
 
 	client.IsReady = isReady
-	client.LastSeen = time.Now().Unix()
 
 	readyCount := countReadyClientsLocked()
 	totalCount := len(serverState.Clients)
@@ -86,35 +174,38 @@ func handleReadyState(clientID string, isReady bool) {
 	}
 }
 
-func listenSocket(conn *websocket.Conn) {
+func listenSocket(conn *websocket.Conn, clientID string) { // clientID will be passed after registration
+	// Ping-pong handling
+	conn.SetPongHandler(pongHandler(conn))
+	go ping(conn)
+
 	for {
 		var msg struct {
-			Type     string `json:"type"`
-			ClientID string `json:"clientId"`
-			IsReady  bool   `json:"isReady"` // Used by "ready" type
+			Type    string `json:"type"`
+			IsReady bool   `json:"isReady"`
 		}
 
 		if err := conn.ReadJSON(&msg); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket error: %v, ClientID: %s", err, msg.ClientID)
+				log.Printf("WebSocket error for ClientID %s: %v, ", clientID, err)
+			} else if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				log.Printf("Client %s disconnected normally: %v", clientID, err)
+			} else {
+				log.Printf("Read error for ClientID %s: %v.", clientID, err)
 			}
-			// TODO: Handle client disconnection: remove client from globalState.Clients
-			// This needs locking and careful handling if msg.ClientID is known.
+			// TODO See error codes to treat acordingly
 			break
 		}
+
 		switch msg.Type {
-		case "register":
-			handleClientRegistration(msg.ClientID, msg.IsReady, conn)
 		case "ready":
-			handleReadyState(msg.ClientID, msg.IsReady)
+			handleReadyState(clientID, msg.IsReady)
 		default:
-			log.Printf("Received unknown message type: %s from ClientID: %s", msg.Type, msg.ClientID)
+			log.Printf("Received unknown message type: %s from ClientID: %s", msg.Type, clientID)
 		}
 	}
-	// TODO: Implement client cleanup logic here if ClientID was established.
-	// For example, after the loop breaks, if a clientID was associated with this connection,
-	// remove it from globalState.Clients and broadcast an update.
-	// This requires knowing the clientID for this connection.
+
+	handleDisconnection(clientID)
 }
 
 func webSocketHandler(c *gin.Context) {
@@ -124,8 +215,27 @@ func webSocketHandler(c *gin.Context) {
 		return
 	}
 
-	// On initial connection, we don't know the clientID yet.
-	// It will be sent in the "register" message.
+	// Expect the first message to be "register"
+	var firstMsg struct {
+		Type     string `json:"type"`
+		ClientID string `json:"clientId"`
+		IsReady  bool   `json:"isReady"`
+	}
 
-	go listenSocket(conn)
+	if err := conn.ReadJSON(&firstMsg); err != nil {
+		log.Printf("Error reading first message (expected register): %v", err)
+		conn.Close()
+		return
+	}
+
+	if firstMsg.Type != "register" {
+		log.Printf("ERROR: First message was not 'register', received: %s. Closing connection.", firstMsg.Type)
+		conn.WriteJSON(gin.H{"error": "First message must be of type 'register'"})
+		conn.Close()
+		return
+	}
+
+	handleClientRegistration(firstMsg.ClientID, firstMsg.IsReady, conn)
+
+	go listenSocket(conn, firstMsg.ClientID)
 }
