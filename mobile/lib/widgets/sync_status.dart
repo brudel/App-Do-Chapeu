@@ -16,8 +16,8 @@ class SyncStatus extends StatelessWidget {
     required this.isReady,
     required this.onToggleReady,
     required this.onUploadImage,
-    Key? key,
-  }) : super(key: key);
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {

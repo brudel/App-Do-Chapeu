@@ -9,8 +9,8 @@ class MultiTagApp extends StatelessWidget {
   const MultiTagApp({
     required this.prefs,
     required this.serverUrl,
-    Key? key,
-  }) : super(key: key);
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {

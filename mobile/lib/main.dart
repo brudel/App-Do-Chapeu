@@ -10,7 +10,7 @@ void main() async {
 
 class MultiTagApp extends StatelessWidget {
   final SharedPreferences prefs;
-  final String serverUrl = '192.168.15.100:8080';
+  final String serverUrl = '152.67.53.14:8080';
 
   const MultiTagApp({super.key, required this.prefs});
 

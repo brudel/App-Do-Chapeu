@@ -32,7 +32,7 @@ class SocketService {
       );
   
       await _channel.ready;
-    } on Exception catch (e) {
+    } on Exception {
       //print('\t\t\t Error creating WebSocket: $e');
       return;
     }
