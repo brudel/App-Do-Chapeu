@@ -8,33 +8,32 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// countReadyClientsLocked assumes the globalState.mu is already locked.
-func countReadyClientsLocked() int {
-	count := 0
+func readyDataLocked() (readyCount int, totalCount int) {
+	readyCount = 0
 	for _, client := range serverState.Clients {
 		if client.IsReady {
-			count++
+			readyCount++
 		}
 	}
-	return count
+
+	return readyCount, len(serverState.Clients)
 }
 
 func broadcastToClients(message interface{}) {
-	serverState.mu.Lock()
-	// Create a list of connections to send to, under lock, to avoid holding lock during I/O
+	serverState.Lock()
+
 	connsToBroadcast := make([]*websocket.Conn, 0, len(serverState.Clients))
 	for _, client := range serverState.Clients {
 		if client.Conn != nil {
 			connsToBroadcast = append(connsToBroadcast, client.Conn)
 		}
 	}
-	serverState.mu.Unlock() // Unlock before sending
+	serverState.Unlock()
 
 	for _, conn := range connsToBroadcast {
 		go func() {
 			if err := conn.WriteJSON(message); err != nil {
 				log.Printf("Error broadcasting to client: %v", err)
-				// Consider more sophisticated error handling, e.g., removing dead clients.
 			}
 		}()
 	}
@@ -51,14 +50,13 @@ func broadcastPartialState(clientID string, isReady bool, readyCount int, totalC
 }
 
 func generateFullStateMessage() gin.H {
-	serverState.mu.Lock()
+	serverState.Lock()
 	// Make it an struct
-	readyCount := countReadyClientsLocked()
-	totalCount := len(serverState.Clients)
+	readyCount, totalCount := readyDataLocked()
 	overallState := serverState.OverallState
 	targetTime := serverState.TargetShowTime
 
-	serverState.mu.Unlock() // Unlock before file access and network I/O
+	serverState.Unlock() // Unlock before file access and network I/O
 
 	hasImg := fileExists(imagePath) // fileExists is from image_handlers.go
 	return gin.H{
@@ -73,12 +71,9 @@ func generateFullStateMessage() gin.H {
 	}
 }
 
-func start(readyCount int, totalCount int, targetTime string) {
-	// Broadcast the start message with the currently active target time
+func start(targetTime string) {
 	broadcastToClients(gin.H{
 		"type":               "start",
-		"readyCount":         readyCount,
-		"totalCount":         totalCount,
 		"targetTimestampUTC": targetTime,
 	})
 

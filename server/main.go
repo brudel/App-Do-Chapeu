@@ -7,18 +7,17 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	// gorilla/websocket is now used in websocket_handlers.go
 )
 
 const minUsers = 1
 const serverResetDelay = 3 * time.Second
 
 type ServerState struct {
-	mu             sync.Mutex
 	Clients        map[string]*ClientState
 	ExpectedUsers  int
 	OverallState   string // "WaitingForUsers", "WaitingForReady", "Triggered", "Displaying"
 	TargetShowTime string // RFC3339Nano format
+	sync.Mutex
 }
 
 type ClientState struct {
@@ -26,13 +25,14 @@ type ClientState struct {
 	IsReady          bool
 	registrationTime int64
 	RemovalTimer     *time.Timer
+	sync.Mutex
 }
 
 var serverState ServerState
 
 func softStateReset() {
 
-	serverState.mu.Lock()
+	serverState.Lock()
 
 	serverState.OverallState = "WaitingForReady" // Reset to a known initial state
 	serverState.TargetShowTime = ""              // Clear the target time as it's now processed
@@ -44,7 +44,7 @@ func softStateReset() {
 	}
 	log.Printf("AfterFunc: Global state has been reset. New state: %s.", serverState.OverallState)
 
-	serverState.mu.Unlock() // Unlock BEFORE I/O (fileExists and broadcasting)
+	serverState.Unlock() // Unlock BEFORE I/O (fileExists and broadcasting)
 
 	broadcastToClients(generateFullStateMessage())
 }

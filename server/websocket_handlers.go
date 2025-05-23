@@ -39,25 +39,24 @@ func ping(conn *websocket.Conn) {
 }
 
 func removeClient(clientID string) {
-	serverState.mu.Lock()
+	serverState.Lock()
 	_, exists := serverState.Clients[clientID]
 	if !exists {
 		log.Printf("ERROR: Removing non-existing client: '%s'", clientID)
-		serverState.mu.Unlock()
+		serverState.Unlock()
 		return
 	}
 
 	delete(serverState.Clients, clientID)
 
-	readyCount := countReadyClientsLocked()
-	totalCount := len(serverState.Clients)
+	readyCount, totalCount := readyDataLocked()
 
 	if totalCount < serverState.ExpectedUsers &&
 		serverState.OverallState == "WaitingForReady" {
 		serverState.OverallState = "WaitingForUsers"
 	}
 
-	serverState.mu.Unlock()
+	serverState.Unlock()
 	log.Printf("Removing ClientID: %s", clientID)
 
 	broadcastPartialState(clientID, false, readyCount, totalCount)
@@ -65,12 +64,12 @@ func removeClient(clientID string) {
 
 func handleDisconnection(clientID string) {
 
-	serverState.mu.Lock()
+	serverState.Lock()
 	client, exists := serverState.Clients[clientID]
 
 	if !exists {
 		log.Printf("ERROR: Disconnecting non-existing ClientID: %s", clientID)
-		serverState.mu.Unlock() // Unlock before returning
+		serverState.Unlock() // Unlock before returning
 		return
 	}
 
@@ -81,8 +80,7 @@ func handleDisconnection(clientID string) {
 	}
 
 	client.IsReady = false
-	readyCount := countReadyClientsLocked()
-	totalCount := len(serverState.Clients)
+	readyCount, totalCount := readyDataLocked()
 
 	// Schedule client removal
 	client.RemovalTimer = time.AfterFunc(5*time.Second, func() {
@@ -90,7 +88,7 @@ func handleDisconnection(clientID string) {
 	})
 	//log.Printf("Scheduled removal of ClientID %s in 5 seconds.", clientID)
 
-	serverState.mu.Unlock()
+	serverState.Unlock()
 
 	log.Printf("Disconnecting ClientID: %s", clientID)
 
@@ -98,7 +96,7 @@ func handleDisconnection(clientID string) {
 }
 
 func handleClientRegistration(clientID string, isReady bool, conn *websocket.Conn) {
-	serverState.mu.Lock()
+	serverState.Lock()
 
 	if client, exists := serverState.Clients[clientID]; exists {
 		log.Printf("Reconnecting clientID: %s", clientID)
@@ -128,11 +126,9 @@ func handleClientRegistration(clientID string, isReady bool, conn *websocket.Con
 		}
 	} // Get the actual state after registration logic
 
-	// Get counts for broadcastPartialState while lock is held
-	readyCount := countReadyClientsLocked()
-	totalCount := len(serverState.Clients)
+	readyCount, totalCount := readyDataLocked()
 
-	serverState.mu.Unlock() // Unlock before network I/O
+	serverState.Unlock() // Unlock before network I/O
 
 	conn.WriteJSON(generateFullStateMessage()) // sendFullState handles its own locking
 	broadcastPartialState(clientID, isReady, readyCount, totalCount)
@@ -151,24 +147,23 @@ func checkStartLocked(readyCount int, totalCount int) string {
 }
 
 func handleReadyState(clientID string, isReady bool) {
-	serverState.mu.Lock()
+	serverState.Lock()
 	client, exists := serverState.Clients[clientID]
 	if !exists {
-		serverState.mu.Unlock()
+		serverState.Unlock()
 		log.Printf("Received 'ready' from unknown clientID: %s", clientID)
 		return
 	}
 
 	client.IsReady = isReady
 
-	readyCount := countReadyClientsLocked()
-	totalCount := len(serverState.Clients)
+	readyCount, totalCount := readyDataLocked()
 
 	parsedTargetTime := checkStartLocked(readyCount, totalCount)
-	serverState.mu.Unlock()
+	serverState.Unlock()
 
 	if parsedTargetTime != "" {
-		start(readyCount, totalCount, parsedTargetTime)
+		start(parsedTargetTime)
 	} else {
 		broadcastPartialState(clientID, isReady, readyCount, totalCount)
 	}
